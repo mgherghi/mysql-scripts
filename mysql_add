@@ -10,7 +10,7 @@ DB_NAME="<replace_database_name>"
 DB_USER="<replace_username>"
 DB_PASS="<replace_password>"
 DB_HOST="<replace_hostname>"
-DB_PORT=4000
+DB_PORT=<replace_port>
 
 USERNAME=""
 PASSWORD=""
