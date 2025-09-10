@@ -1,0 +1,52 @@
+#!/bin/bash
+set -euo pipefail
+
+# Usage: ./deleteUser --name mike
+# Requires: mysql CLI
+
+DB_NAME="<replace_database_name>"
+DB_USER="<replace_username>"
+DB_PASS="<replace_password>"
+DB_HOST="<replace_hostname>"
+DB_PORT=<replace_port>
+
+USERNAME=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --name)
+      USERNAME="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$USERNAME" ]]; then
+  echo "Usage: $0 --name <username>"
+  exit 1
+fi
+
+# Check if user exists
+ENTITY_ID=$(mysql -N -B -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+  -e "SELECT entity_id FROM guacamole_entity WHERE name='$USERNAME' AND type='USER';")
+
+if [[ -z "$ENTITY_ID" ]]; then
+  echo "Error: User '$USERNAME' does not exist."
+  exit 1
+fi
+
+# Delete user (cascades handle related tables)
+SQL=$(cat <<EOF
+START TRANSACTION;
+DELETE FROM guacamole_entity WHERE entity_id=$ENTITY_ID;
+COMMIT;
+EOF
+)
+
+echo "$SQL" | mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME"
+
+echo "User '$USERNAME' deleted successfully."
