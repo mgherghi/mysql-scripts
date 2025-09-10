@@ -1,0 +1,111 @@
+#!/bin/bash
+set -euo pipefail
+
+# Usage:
+#   ./myScript --name mike --password cyber --full-name "Mike Smith" --role "Developer"
+#
+# Requires: mysql CLI, openssl, xxd
+
+DB_NAME="<replace_database_name>"
+DB_USER="<replace_username>"
+DB_PASS="<replace_password>"
+DB_HOST="<replace_hostname>"
+DB_PORT=4000
+
+USERNAME=""
+PASSWORD=""
+FULLNAME=""
+ROLE=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --name)
+      USERNAME="$2"
+      shift 2
+      ;;
+    --password)
+      PASSWORD="$2"
+      shift 2
+      ;;
+    --full-name)
+      FULLNAME="$2"
+      shift 2
+      ;;
+    --role)
+      ROLE="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$USERNAME" || -z "$PASSWORD" ]]; then
+  echo "Usage: $0 --name <username> --password <password> [--full-name \"Full Name\"] [--role \"Role\"]"
+  exit 1
+fi
+
+# Check if username already exists
+EXISTS=$(mysql -N -B -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+  -e "SELECT COUNT(*) FROM guacamole_entity WHERE name='$USERNAME' AND type='USER';")
+
+if [[ "$EXISTS" -gt 0 ]]; then
+  echo "Error: User '$USERNAME' already exists. Aborting."
+  exit 1
+fi
+
+# Generate 32-byte random salt
+SALT_BIN=$(openssl rand -out /dev/stdout 32 2>/dev/null)
+SALT_HEX=$(echo -n "$SALT_BIN" | xxd -p -c 256)
+
+# Compute SHA256(salt + password)
+HASH_BIN=$( (echo -n "$SALT_BIN"; echo -n "$PASSWORD") | openssl dgst -sha256 -binary )
+HASH_HEX=$(echo -n "$HASH_BIN" | xxd -p -c 256)
+
+SQL=$(cat <<EOF
+START TRANSACTION;
+
+-- Insert into entity
+INSERT INTO guacamole_entity (name, type)
+VALUES ('$USERNAME', 'USER');
+
+SET @ENTITY_ID = LAST_INSERT_ID();
+
+-- Insert into user, mark as expired (force password change at first login)
+INSERT INTO guacamole_user (entity_id, password_hash, password_salt, password_date, expired, full_name, organizational_role)
+VALUES (
+  @ENTITY_ID,
+  UNHEX('$HASH_HEX'),
+  UNHEX('$SALT_HEX'),
+  NOW(),
+  1,
+  ${FULLNAME:+QUOTE('$FULLNAME')},
+  ${ROLE:+QUOTE('$ROLE')}
+);
+
+SET @USER_ID = LAST_INSERT_ID();
+
+-- Give self UPDATE permission (to allow password changes)
+INSERT INTO guacamole_user_permission (entity_id, affected_user_id, permission)
+VALUES (@ENTITY_ID, @USER_ID, 'UPDATE');
+
+COMMIT;
+EOF
+)
+
+# Replace QUOTE() placeholders with safe SQL or NULL
+SQL=$(echo "$SQL" | sed "s/QUOTE('\([^']*\)')/'\1'/g; s/QUOTE('')/NULL/g")
+
+echo "$SQL" | mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME"
+
+
+
+echo "User '$USERNAME' created with ability to change own password. First login will require a password change."
+if [[ -n "$FULLNAME" ]]; then
+  echo "Full Name: $FULLNAME"
+fi
+if [[ -n "$ROLE" ]]; then
+  echo "Role: $ROLE"
+fi
