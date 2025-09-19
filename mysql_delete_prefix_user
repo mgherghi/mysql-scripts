@@ -1,0 +1,78 @@
+#!/bin/bash
+set -euo pipefail
+
+# Usage:
+#   ./deleteUsersByPrefix --prefix crn241 [--dry-run]
+#
+# Requires: mysql CLI
+
+
+DB_NAME="<replace_database_name>"
+DB_USER="<replace_username>"
+DB_PASS="<replace_password>"
+DB_HOST="<replace_hostname>"
+DB_PORT=<replace_port>
+
+PREFIX=""
+DRYRUN=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --prefix)
+      PREFIX="$2"
+      shift 2
+      ;;
+    --dry-run)
+      DRYRUN=true
+      shift 1
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$PREFIX" ]]; then
+  echo "Usage: $0 --prefix <username-prefix> [--dry-run]"
+  exit 1
+fi
+
+# Find matching users
+USERS=$(mysql -N -B -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+  -e "SELECT name FROM guacamole_entity WHERE name LIKE '${PREFIX}%' AND type='USER';")
+
+COUNT=$(echo "$USERS" | grep -c . || true)
+
+if [[ "$COUNT" -eq 0 ]]; then
+  echo "No users found with prefix '$PREFIX'."
+  exit 0
+fi
+
+echo "Found $COUNT user(s) with prefix '$PREFIX':"
+echo "$USERS"
+
+if $DRYRUN; then
+  echo "Dry-run mode: no deletions performed."
+  exit 0
+fi
+
+# Ask for confirmation
+read -p "Are you sure you want to delete ALL these users? (y/N): " CONFIRM
+CONFIRM=${CONFIRM,,}  # normalize to lowercase
+if [[ "$CONFIRM" != "y" && "$CONFIRM" != "yes" ]]; then
+  echo "Aborted."
+  exit 0
+fi
+
+# Perform delete
+SQL=$(cat <<EOF
+START TRANSACTION;
+DELETE FROM guacamole_entity WHERE name LIKE '${PREFIX}%' AND type='USER';
+COMMIT;
+EOF
+)
+
+echo "$SQL" | mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME"
+
+echo "Deleted $COUNT user(s) with prefix '$PREFIX'."
